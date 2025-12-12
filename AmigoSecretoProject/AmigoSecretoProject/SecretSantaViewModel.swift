@@ -1,10 +1,3 @@
-//
-//  SecretSantaViewModel.swift
-//  AmigoSecretoProject
-//
-//  Created by Lucas Dal Pra Brascher on 11/12/25.
-//
-
 import Foundation
 import Combine
 import SwiftUI
@@ -19,7 +12,7 @@ class SecretSantaViewModel: ObservableObject {
     // Configuração Resend
     private let resendAPIKey = "re_g4LgvAxM_8jdFxayeRz2Vhd7xrpPFL4Z5"
     private let resendAPIURL = "https://api.resend.com/emails"
-    private let fromEmail = "onboarding@resend.dev" // Email padrão do Resend para testes
+    private let fromEmail = "amigoSecretoCulegudos@dalpra0.tech"
     
     func addParticipant(name: String, email: String) {
         guard !name.isEmpty && !email.isEmpty else {
@@ -67,7 +60,7 @@ class SecretSantaViewModel: ObservableObject {
     }
     
     private func generateValidAssignments() -> [Assignment]? {
-        var givers = participants
+        let givers = participants
         var receivers = participants
         var tempAssignments: [Assignment] = []
         
@@ -109,13 +102,22 @@ class SecretSantaViewModel: ObservableObject {
         
         var successCount = 0
         var failCount = 0
+        var errors: [String] = []
         
-        for assignment in assignments {
-            let success = await sendEmailViaResend(to: assignment.giver, receiver: assignment.receiver)
-            if success {
+        for (index, assignment) in assignments.enumerated() {
+            // Delay de 1 segundo entre cada email para respeitar rate limit
+            if index > 0 {
+                try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 segundo
+            }
+            
+            let result = await sendEmailViaResend(to: assignment.giver, receiver: assignment.receiver)
+            if result.success {
                 successCount += 1
             } else {
                 failCount += 1
+                if let errorMsg = result.error {
+                    errors.append("\(assignment.giver.name): \(errorMsg)")
+                }
             }
         }
         
@@ -123,15 +125,26 @@ class SecretSantaViewModel: ObservableObject {
             isSending = false
             
             if failCount == 0 {
-                alertMessage = "✅ Todos os emails foram enviados com sucesso! (\(successCount)/\(assignments.count))"
+                alertMessage = "✅ Todos os emails foram enviados! (\(successCount)/\(assignments.count))"
             } else {
-                alertMessage = "⚠️ Enviados: \(successCount), Falhas: \(failCount)"
+                var message = "⚠️ Enviados: \(successCount), Falhas: \(failCount)\n\n"
+                
+                if errors.contains(where: { $0.contains("testing emails") || $0.contains("verify a domain") }) {
+                    message += "⚠️ IMPORTANTE: No plano gratuito do Resend, você só pode enviar emails para: lucas.dalprabrascher@gmail.com\n\n"
+                    message += "Para enviar para outros emails:\n"
+                    message += "1. Configure um domínio no Resend\n"
+                    message += "2. Ou use todos os participantes com o email: lucas.dalprabrascher@gmail.com para testar"
+                } else if !errors.isEmpty {
+                    message += "Erros:\n" + errors.prefix(3).joined(separator: "\n")
+                }
+                
+                alertMessage = message
             }
             showingAlert = true
         }
     }
     
-    private func sendEmailViaResend(to giver: Person, receiver: Person) async -> Bool {
+    private func sendEmailViaResend(to giver: Person, receiver: Person) async -> (success: Bool, error: String?) {
         let subject = "🎅 Seu Amigo Secreto"
         let htmlBody = """
         <!DOCTYPE html>
@@ -202,7 +215,7 @@ class SecretSantaViewModel: ObservableObject {
         ]
         
         guard let url = URL(string: resendAPIURL) else {
-            return false
+            return (false, "URL inválida")
         }
         
         var request = URLRequest(url: url)
@@ -217,20 +230,27 @@ class SecretSantaViewModel: ObservableObject {
             
             if let httpResponse = response as? HTTPURLResponse {
                 if httpResponse.statusCode == 200 {
-                    return true
+                    return (true, nil)
                 } else {
-                    // Log do erro para debug
+                    // Log e retorna o erro
                     if let errorString = String(data: data, encoding: .utf8) {
-                        print("Erro ao enviar email: \(errorString)")
+                        print("Erro ao enviar email para \(giver.name): \(errorString)")
+                        
+                        // Extrair mensagem de erro do JSON
+                        if let errorData = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                           let message = errorData["message"] as? String {
+                            return (false, message)
+                        }
+                        return (false, errorString)
                     }
-                    return false
+                    return (false, "Erro HTTP \(httpResponse.statusCode)")
                 }
             }
             
-            return false
+            return (false, "Resposta inválida")
         } catch {
             print("Erro na requisição: \(error.localizedDescription)")
-            return false
+            return (false, error.localizedDescription)
         }
     }
     
